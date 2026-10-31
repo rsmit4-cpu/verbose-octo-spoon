@@ -1,7 +1,7 @@
 """Kleine HTTP-ingang voor snelkoppelingen (Siri / Opdrachten, Android Tasker).
 
 POST /ask  met header 'Authorization: Bearer <API_TOKEN>' en JSON {"text": "...", "spoken": true}
--> {"reply": "..."}. Het gesprek is hetzelfde als in WhatsApp.
+-> {"reply": "..."}. Het gesprek is hetzelfde als in Telegram.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ SPOKEN_HINT = (
 )
 
 
-def ask_routes(assistant: Assistant, token: str, chat_id: int) -> list[web.RouteDef]:
+def build_app(assistant: Assistant, token: str, chat_id: int) -> web.Application:
     async def ask(request: web.Request) -> web.Response:
         auth = request.headers.get("Authorization", "")
         if not hmac.compare_digest(auth.encode(), f"Bearer {token}".encode()):
@@ -40,10 +40,17 @@ def ask_routes(assistant: Assistant, token: str, chat_id: int) -> list[web.Route
             reply = "Er ging iets mis aan mijn kant."
         return web.json_response({"reply": reply})
 
-    return [web.post("/ask", ask)]
+    async def health(_: web.Request) -> web.Response:
+        return web.Response(text="ok")
 
-
-def build_app(assistant: Assistant, token: str, chat_id: int) -> web.Application:
     app = web.Application()
-    app.add_routes(ask_routes(assistant, token, chat_id))
+    app.add_routes([web.post("/ask", ask), web.get("/health", health)])
     return app
+
+
+async def start(assistant: Assistant, token: str, chat_id: int, host: str, port: int) -> web.AppRunner:
+    runner = web.AppRunner(build_app(assistant, token, chat_id))
+    await runner.setup()
+    await web.TCPSite(runner, host, port).start()
+    log.info("Snelkoppeling-API luistert op http://%s:%s/ask", host, port)
+    return runner

@@ -1,4 +1,4 @@
-"""Het brein: een Claude-agentlus met tools, per WhatsApp-nummer een eigen gesprek."""
+"""Het brein: een Claude-agentlus met tools, per Telegram-chat een eigen gesprek."""
 from __future__ import annotations
 
 import asyncio
@@ -18,10 +18,9 @@ BETAS = [
 ]
 
 SYSTEM_PROMPT = """\
-Je bent de persoonlijke assistent van de gebruiker. Je praat met hem/haar via WhatsApp op de telefoon.
+Je bent de persoonlijke assistent van de gebruiker. Je praat met hem/haar via Telegram op de telefoon.
 Antwoord standaard in het Nederlands (of in de taal van de gebruiker), kort en to the point: het zijn chatberichten
-op een klein scherm. Gebruik WhatsApp-opmaak: *vet* (één sterretje), _cursief_, en '• ' voor lijstjes.
-Geen markdown-koppen (#), geen **dubbele sterretjes** en geen tabellen.
+op een klein scherm. Gebruik geen markdown-tabellen.
 
 Wat je doet:
 - Meedenken: plannen maken, opties afwegen, dingen uitzoeken. Gebruik web_search voor actuele informatie.

@@ -68,6 +68,54 @@ cp .env.example .env    # en vul de waarden in
    (`MS_TENANT=consumers` voor privé, `organizations` voor werk).
 4. `python -m assistant.setup_outlook` en volg de instructies; herstart de bot.
 
+## Snel aanroepen: met je stem of door te typen
+
+### 1. In Telegram (werkt direct)
+- **Typen:** gewoon een bericht sturen.
+- **Spreken:** houd de 🎤-knop ingedrukt en spreek een spraakbericht in. De bot zet het lokaal en gratis
+  om naar tekst (faster-whisper; de eerste keer wordt het spraakmodel eenmalig gedownload, ~500 MB) en laat
+  zien wat hij verstond.
+- **Sneller openen:** zet de chat vast bovenaan in Telegram. Op Android: chat openen → ⋮ →
+  *Toevoegen aan beginscherm*.
+
+### 2. "Hé Siri, Assistent" (zonder Telegram te openen)
+Hiermee spreek je in of typ je, en het antwoord wordt **voorgelezen**. Het is hetzelfde gesprek als in Telegram.
+
+**Eenmalig op de server:**
+1. Maak een geheime sleutel: `python -c "import secrets; print(secrets.token_urlsafe(32))"` en zet die
+   in `.env` als `API_TOKEN`. Herstart de bot.
+2. Zorg dat je telefoon de server kan bereiken. Het makkelijkst en veiligst is **Tailscale** (gratis):
+   installeer het op de server én je telefoon en log op beide in met hetzelfde account. Je adres wordt dan
+   `http://<naam-van-je-server>:8080/ask`. (Zet poort 8080 niet zomaar open op internet.)
+
+**iPhone – app Opdrachten → + (nieuwe opdracht), noem hem "Assistent":**
+1. *Dicteer tekst* (taal: Nederlands; stoppen met luisteren: "Na pauze").
+2. *Haal inhoud van URL op*: URL `http://<server>:8080/ask`, methode **POST**,
+   header `Authorization` = `Bearer <jouw API_TOKEN>`, hoofdtekst **JSON** met veld `text` =
+   *Gedicteerde tekst*.
+3. *Haal woordenboekwaarde op*: sleutel `reply` uit *Inhoud van URL*.
+4. *Spreek tekst uit*: *Woordenboekwaarde*. (Of *Toon resultaat* als je liever leest.)
+
+Zeg nu **"Hé Siri, Assistent"**. Tip: koppel de opdracht ook aan de **Actieknop** of aan
+*Instellingen → Toegankelijkheid → Aanraken → Tik op achterkant*.
+Voor **typen**: dupliceer de opdracht als "Typ assistent" en vervang stap 1 door *Vraag om invoer*
+(en zet in stap 2 ook `spoken` = `false` als je opmaak wél wilt zien). Zet hem als widget op je beginscherm.
+
+**Android – met Tasker** (taak "Assistent"):
+1. *Input → Get Voice* (taal nl-NL).
+2. *Net → HTTP Request*: POST naar `http://<server>:8080/ask`, header
+   `Authorization:Bearer <jouw API_TOKEN>`, body `{"text":"%gv_heard"}`, content type `application/json`.
+3. *Alert → Say*: `%http_data.reply`.
+
+Zet de taak als snelkoppeling/widget op je beginscherm. Voor typen: vervang stap 1 door
+*Variable Query*.
+
+**Even testen vanaf een computer:**
+```bash
+curl -X POST http://<server>:8080/ask -H "Authorization: Bearer <API_TOKEN>" \
+     -H "Content-Type: application/json" -d '{"text":"Wat staat er morgen in mijn agenda?"}'
+```
+
 ## Commando's
 
 - Gewoon typen: praten met je assistent
@@ -77,7 +125,8 @@ cp .env.example .env    # en vul de waarden in
 
 ## Techniek
 
-- `assistant/bot.py`: Telegram-interface, herinneringslus (elke 20 s), bevestigknoppen
+- `assistant/bot.py`: Telegram-interface, spraakberichten, herinneringslus (elke 20 s), bevestigknoppen
+- `assistant/api.py`: HTTP-ingang `/ask` voor Siri/Tasker; `assistant/voice.py`: spraak → tekst
 - `assistant/agent.py`: Claude-agentlus (model `claude-opus-5-5`, web search, server-side
   compaction voor lange gesprekken, automatische fallback bij een weigering)
 - `assistant/tools.py`: alle tools; `assistant/db.py`: SQLite-opslag in `data/`

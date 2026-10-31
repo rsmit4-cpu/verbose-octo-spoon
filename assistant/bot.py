@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import tempfile
+from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
@@ -85,6 +87,7 @@ def main() -> None:
             "• 'Wanneer speelt Feyenoord? Herinner me een kwartier van tevoren'\n"
             "• 'Wat staat er deze week in mijn agenda?'\n"
             "• 'Heb ik nog belangrijke ongelezen mail?'\n\n"
+            "🎤 Je kunt ook een spraakbericht sturen (houd de microfoonknop ingedrukt).\n\n"
             "/taken – je takenlijst · /herinneringen – geplande herinneringen · /reset – nieuw gesprek"
         )
 
@@ -98,9 +101,7 @@ def main() -> None:
             out = await toolbox.run(tool, args, update.effective_chat.id)
             await update.message.reply_text(out[:TELEGRAM_LIMIT])
 
-    async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not allowed(update) or not update.message or not update.message.text:
-            return
+    async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
         chat_id = update.effective_chat.id
 
         async def typing():
@@ -110,7 +111,7 @@ def main() -> None:
 
         typer = asyncio.create_task(typing())
         try:
-            reply = await assistant.chat(chat_id, update.message.text)
+            reply = await assistant.chat(chat_id, text)
         except Exception:
             log.exception("Fout bij verwerken bericht")
             reply = "Er ging iets mis aan mijn kant. Probeer het zo nog eens."
@@ -118,6 +119,32 @@ def main() -> None:
             typer.cancel()
         for part in _chunks(reply):
             await update.message.reply_text(part)
+
+    async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if allowed(update) and update.message and update.message.text:
+            await answer(update, context, update.message.text)
+
+    async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not allowed(update) or not update.message:
+            return
+        media = update.message.voice or update.message.audio
+        await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+        try:
+            from .voice import transcribe
+
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "bericht.ogg"
+                await (await media.get_file()).download_to_drive(path)
+                text = await transcribe(str(path))
+        except Exception:
+            log.exception("Spraak omzetten mislukt")
+            await update.message.reply_text("Ik kon je spraakbericht niet verstaan. Wil je het typen?")
+            return
+        if not text:
+            await update.message.reply_text("Ik hoorde niets. Probeer het nog eens?")
+            return
+        await update.message.reply_text(f"🎤 “{text}”")
+        await answer(update, context, text)
 
     async def on_button(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
@@ -153,14 +180,31 @@ def main() -> None:
 
     async def post_init(application: Application) -> None:
         application.bot_data["reminder_task"] = asyncio.create_task(reminder_loop())
+        if cfg.api_token:
+            from . import api
+
+            # In een privéchat is de chat-ID gelijk aan je gebruikers-ID: zo deel je één gesprek met Telegram.
+            owner = min(cfg.allowed_user_ids) if cfg.allowed_user_ids else None
+            if owner is None:
+                log.warning("API_TOKEN gezet maar ALLOWED_USER_IDS is leeg: snelkoppeling-API niet gestart.")
+            else:
+                application.bot_data["api"] = await api.start(
+                    assistant, cfg.api_token, owner, cfg.api_host, cfg.api_port
+                )
+
+    async def post_shutdown(application: Application) -> None:
+        if runner := application.bot_data.get("api"):
+            await runner.cleanup()
 
     app.post_init = post_init
+    app.post_shutdown = post_shutdown
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("taken", lambda u, c: quick(u, c, "list_tasks", {"include_done": False})))
     app.add_handler(CommandHandler("herinneringen", lambda u, c: quick(u, c, "list_reminders", {})))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
 
     if not cfg.allowed_user_ids:
         log.warning("ALLOWED_USER_IDS is leeg: niemand kan de bot gebruiken. Stuur /start om je ID te zien.")

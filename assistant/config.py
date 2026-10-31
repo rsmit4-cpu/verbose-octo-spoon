@@ -25,6 +25,9 @@ class Config:
     data_dir: Path = Path(os.getenv("DATA_DIR", "./data"))
     ms_client_id: str = os.getenv("MS_CLIENT_ID", "")
     ms_tenant: str = os.getenv("MS_TENANT", "consumers")
+    api_token: str = os.getenv("API_TOKEN", "")
+    api_host: str = os.getenv("API_HOST", "0.0.0.0")
+    api_port: int = int(os.getenv("API_PORT", "8080"))
 
     @property
     def db_path(self) -> Path:

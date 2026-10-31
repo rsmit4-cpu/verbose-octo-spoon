@@ -11,14 +11,27 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _ids(raw: str) -> set[int]:
-    return {int(x) for x in raw.replace(" ", "").split(",") if x}
+def _numbers(raw: str) -> tuple[int, ...]:
+    """'+31 6 12345678, 3161111' -> (31612345678, 3161111). Het eerste nummer is de eigenaar."""
+    out = []
+    for part in raw.split(","):
+        digits = "".join(c for c in part if c.isdigit())
+        if digits:
+            out.append(int(digits))
+    return tuple(out)
 
 
 @dataclass(frozen=True)
 class Config:
-    telegram_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    allowed_user_ids: set[int] = field(default_factory=lambda: _ids(os.getenv("ALLOWED_USER_IDS", "")))
+    # WhatsApp Business Cloud API (Meta)
+    wa_token: str = os.getenv("WHATSAPP_TOKEN", "")
+    wa_phone_number_id: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+    wa_app_secret: str = os.getenv("WHATSAPP_APP_SECRET", "")
+    wa_verify_token: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
+    wa_api_version: str = os.getenv("WHATSAPP_API_VERSION", "v23.0")
+    wa_reminder_template: str = os.getenv("WHATSAPP_REMINDER_TEMPLATE", "")
+    wa_template_language: str = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "nl")
+    allowed_numbers: tuple[int, ...] = field(default_factory=lambda: _numbers(os.getenv("ALLOWED_NUMBERS", "")))
     timezone: ZoneInfo = ZoneInfo(os.getenv("TIMEZONE", "Europe/Amsterdam"))
     model: str = os.getenv("CLAUDE_MODEL", "claude-opus-5-5")
     effort: str = os.getenv("CLAUDE_EFFORT", "medium")

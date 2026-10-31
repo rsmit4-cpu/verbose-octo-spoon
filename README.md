@@ -16,6 +16,8 @@ Google Agenda, Gmail en Outlook-agenda gebruiken.
 | Google Agenda | "Wat staat er deze week in mijn agenda?" · "Zet vrijdag 14:00 een afspraak met Sanne" |
 | Outlook-agenda | Zelfde als hierboven, in je Outlook-/werkagenda |
 | Gmail | "Heb ik belangrijke ongelezen mail?" · "Schrijf een antwoord aan Jan" (versturen pas na jouw tik op ✅) |
+| Spraak | Spreek een 🎤-bericht in en hij praat terug met een spraakbericht |
+| Ochtendoverzicht | Elke ochtend om 7:30: agenda, taken, herinneringen, belangrijke mail, weer en je club |
 
 ### Wat hij (nog) níet kan: je telefoon besturen
 
@@ -116,17 +118,47 @@ curl -X POST http://<server>:8080/ask -H "Authorization: Bearer <API_TOKEN>" \
      -H "Content-Type: application/json" -d '{"text":"Wat staat er morgen in mijn agenda?"}'
 ```
 
+## Spraakantwoorden
+
+Stuur je een spraakbericht, dan antwoordt de assistent met een **spraakbericht** (natuurlijke Nederlandse stem),
+met de tekst eronder om terug te lezen. Instellen per chat:
+
+- `/stem auto`: terugpraten als jij inspreekt (standaard)
+- `/stem aan`: altijd met een spraakbericht antwoorden
+- `/stem uit`: altijd met tekst antwoorden
+
+Een andere stem kies je met `TTS_VOICE` in `.env` (bijv. `nl-NL-MaartenNeural` of de Vlaamse
+`nl-BE-DenaNeural`). De stemmen komen van de gratis Microsoft Edge-spraakdienst (pakket `edge-tts`, geen
+account nodig); de tekst van het antwoord gaat daarvoor naar Microsoft. Lukt het een keer niet, dan krijg je
+het antwoord gewoon als tekst.
+
+## Ochtendoverzicht
+
+Elke ochtend (standaard **7:30**) stuurt de assistent je een kort dagoverzicht: afspraken van vandaag,
+openstaande taken, herinneringen, belangrijke ongelezen mail, het weer in je woonplaats en of je club speelt.
+Vertel hem één keer waar je woont en voor welke club je bent ("Onthoud dat ik in Utrecht woon en voor
+FC Utrecht ben"). Je kunt direct op het overzicht reageren, bijv. "verplaats die afspraak naar 15:00".
+
+- `/overzicht`: nu meteen een overzicht
+- `/ochtend 7:00`: ander tijdstip · `/ochtend uit`: uitzetten · `/ochtend`: huidige instelling
+- `/ochtend stem aan`: het overzicht ook laten voorlezen als spraakbericht
+
+Stond de computer om dat tijdstip uit, dan komt het overzicht alsnog als hij binnen 2 uur weer aan gaat.
+
 ## Commando's
 
 - Gewoon typen: praten met je assistent
 - `/taken`: je openstaande taken
 - `/herinneringen`: geplande herinneringen
+- `/overzicht`, `/ochtend`: ochtendoverzicht (zie hierboven)
+- `/stem`: spraakantwoorden aan/uit/auto
 - `/reset`: nieuw gesprek (taken, herinneringen en geheugen blijven bewaard)
 
 ## Techniek
 
 - `assistant/bot.py`: Telegram-interface, spraakberichten, herinneringslus (elke 20 s), bevestigknoppen
-- `assistant/api.py`: HTTP-ingang `/ask` voor Siri/Tasker; `assistant/voice.py`: spraak → tekst
+- `assistant/api.py`: HTTP-ingang `/ask` voor Siri/Tasker; `assistant/voice.py`: spraak ↔ tekst
+- `assistant/briefing.py`: ochtendoverzicht (tijdstip, instellingen, opdracht aan Claude)
 - `assistant/agent.py`: Claude-agentlus (model `claude-opus-5-5`, web search, server-side
   compaction voor lange gesprekken, automatische fallback bij een weigering)
 - `assistant/tools.py`: alle tools; `assistant/db.py`: SQLite-opslag in `data/`

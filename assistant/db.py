@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS reminders (
     repeat TEXT NOT NULL DEFAULT 'none',
     active INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS settings (
+    chat_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (chat_id, key)
+);
 CREATE TABLE IF NOT EXISTS memories (
     id INTEGER PRIMARY KEY,
     fact TEXT NOT NULL,
@@ -129,3 +135,18 @@ class Store:
         cur = self.conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
         self.conn.commit()
         return cur.rowcount > 0
+
+    # ---------- instellingen per chat ----------
+    def get_setting(self, chat_id: int, key: str, default: str | None = None) -> str | None:
+        row = self.conn.execute(
+            "SELECT value FROM settings WHERE chat_id = ? AND key = ?", (chat_id, key)
+        ).fetchone()
+        return row["value"] if row else default
+
+    def set_setting(self, chat_id: int, key: str, value: str | None) -> None:
+        self.conn.execute(
+            "INSERT INTO settings (chat_id, key, value) VALUES (?, ?, ?) "
+            "ON CONFLICT(chat_id, key) DO UPDATE SET value = excluded.value",
+            (chat_id, key, value),
+        )
+        self.conn.commit()

@@ -5,6 +5,7 @@ import asyncio
 import logging
 import secrets
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -15,6 +16,7 @@ from telegram.ext import (
 
 from . import config
 from .agent import Assistant
+from .briefing import BRIEFING_PROMPT, BriefingSettings, parse_time
 from .db import Store
 from .tools import Toolbox
 
@@ -24,6 +26,9 @@ log = logging.getLogger("assistant")
 
 TELEGRAM_LIMIT = 4000
 REMINDER_POLL_SECONDS = 20
+BRIEFING_POLL_SECONDS = 30
+CAPTION_LIMIT = 1000
+VOICE_MODES = ("auto", "aan", "uit")
 
 
 def _chunks(text: str):
@@ -69,6 +74,28 @@ def main() -> None:
 
     toolbox = Toolbox(store=store, tz=cfg.timezone, google=google, outlook=outlook, confirm=confirm)
     assistant = Assistant(toolbox, model=cfg.model, effort=cfg.effort)
+    briefings = BriefingSettings(store, cfg.briefing_time)
+
+    def voice_mode(chat_id: int) -> str:
+        mode = store.get_setting(chat_id, "voice_replies", cfg.voice_replies)
+        return mode if mode in VOICE_MODES else "auto"
+
+    async def send_reply(chat_id: int, text: str, as_voice: bool) -> None:
+        """Antwoord als tekst, of als spraakbericht (met de tekst eronder om terug te lezen)."""
+        if as_voice:
+            try:
+                from .voice import synthesize
+
+                await app.bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
+                audio = await synthesize(text)
+                caption = text if len(text) <= CAPTION_LIMIT else None
+                await app.bot.send_voice(chat_id, audio, caption=caption)
+                if caption is not None:
+                    return
+            except Exception:
+                log.exception("Spraakbericht maken mislukt; ik stuur tekst")
+        for part in _chunks(text):
+            await app.bot.send_message(chat_id, part)
 
     def allowed(update: Update) -> bool:
         user = update.effective_user
@@ -87,7 +114,9 @@ def main() -> None:
             "• 'Wanneer speelt Feyenoord? Herinner me een kwartier van tevoren'\n"
             "• 'Wat staat er deze week in mijn agenda?'\n"
             "• 'Heb ik nog belangrijke ongelezen mail?'\n\n"
-            "🎤 Je kunt ook een spraakbericht sturen (houd de microfoonknop ingedrukt).\n\n"
+            "🎤 Je kunt ook een spraakbericht sturen (houd de microfoonknop ingedrukt); dan praat ik terug.\n"
+            "☀️ Elke ochtend stuur ik je een dagoverzicht.\n\n"
+            "/overzicht – dagoverzicht nu · /ochtend – tijdstip of uit · /stem – spraakantwoorden\n"
             "/taken – je takenlijst · /herinneringen – geplande herinneringen · /reset – nieuw gesprek"
         )
 
@@ -101,8 +130,14 @@ def main() -> None:
             out = await toolbox.run(tool, args, update.effective_chat.id)
             await update.message.reply_text(out[:TELEGRAM_LIMIT])
 
-    async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, spoken: bool = False) -> None:
         chat_id = update.effective_chat.id
+        mode = voice_mode(chat_id)
+        as_voice = mode == "aan" or (mode == "auto" and spoken)
+        if as_voice:
+            from .voice import SPOKEN_REPLY_HINT
+
+            text = SPOKEN_REPLY_HINT + text
 
         async def typing():
             while True:
@@ -117,8 +152,7 @@ def main() -> None:
             reply = "Er ging iets mis aan mijn kant. Probeer het zo nog eens."
         finally:
             typer.cancel()
-        for part in _chunks(reply):
-            await update.message.reply_text(part)
+        await send_reply(chat_id, reply, as_voice)
 
     async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if allowed(update) and update.message and update.message.text:
@@ -144,7 +178,7 @@ def main() -> None:
             await update.message.reply_text("Ik hoorde niets. Probeer het nog eens?")
             return
         await update.message.reply_text(f"🎤 “{text}”")
-        await answer(update, context, text)
+        await answer(update, context, text, spoken=True)
 
     async def on_button(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
@@ -168,6 +202,70 @@ def main() -> None:
                 log.exception("Versturen mislukt")
                 await query.edit_message_text(f"Versturen mislukt: {exc}")
 
+    async def stem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not allowed(update):
+            return
+        chat_id = update.effective_chat.id
+        arg = (context.args[0].lower() if context.args else "")
+        if arg in VOICE_MODES:
+            store.set_setting(chat_id, "voice_replies", arg)
+        uitleg = {"auto": "ik praat terug als jij een spraakbericht stuurt",
+                  "aan": "ik antwoord altijd met een spraakbericht", "uit": "ik antwoord altijd met tekst"}
+        await update.message.reply_text(
+            f"Spraakantwoorden: *{voice_mode(chat_id)}* — {uitleg[voice_mode(chat_id)]}.\n"
+            "Wijzigen: /stem auto · /stem aan · /stem uit", parse_mode="Markdown")
+
+    async def send_briefing(chat_id: int) -> None:
+        await app.bot.send_chat_action(chat_id, ChatAction.TYPING)
+        try:
+            text = await assistant.chat(chat_id, BRIEFING_PROMPT)
+        except Exception:
+            log.exception("Ochtendoverzicht maken mislukt")
+            await app.bot.send_message(chat_id, "☀️ Goedemorgen! Het lukte me niet om je overzicht te maken. "
+                                                "Stuur /overzicht om het opnieuw te proberen.")
+            return
+        await send_reply(chat_id, text, briefings.voice(chat_id))
+
+    async def overzicht(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        if allowed(update):
+            await send_briefing(update.effective_chat.id)
+
+    async def ochtend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not allowed(update):
+            return
+        chat_id = update.effective_chat.id
+        args = [a.lower() for a in context.args or []]
+        if args[:1] == ["uit"]:
+            briefings.set_time(chat_id, None)
+        elif args[:1] == ["stem"] and args[1:2] in (["aan"], ["uit"]):
+            briefings.set_voice(chat_id, args[1] == "aan")
+        elif args:
+            at = parse_time(args[0])
+            if at is None:
+                await update.message.reply_text("Dat tijdstip snap ik niet. Probeer bijv. /ochtend 7:15")
+                return
+            briefings.set_time(chat_id, at)
+        at = briefings.time_for(chat_id)
+        status = f"elke dag om {at.strftime('%H:%M')}" if at else "uit"
+        voice = "aan" if briefings.voice(chat_id) else "uit"
+        await update.message.reply_text(
+            f"☀️ Ochtendoverzicht: {status} (voorlezen: {voice}).\n"
+            "Wijzigen: /ochtend 7:00 · /ochtend uit · /ochtend stem aan · /ochtend stem uit\n"
+            "Nu een overzicht: /overzicht")
+
+    async def briefing_loop() -> None:
+        while True:
+            try:
+                now = datetime.now(cfg.timezone)
+                # In een privéchat is de chat-ID gelijk aan je gebruikers-ID.
+                for chat_id in sorted(cfg.allowed_user_ids):
+                    if briefings.due(chat_id, now):
+                        briefings.mark_sent(chat_id, now.date())  # eerst markeren: nooit dubbel sturen
+                        await send_briefing(chat_id)
+            except Exception:
+                log.exception("Fout in ochtendoverzicht-lus")
+            await asyncio.sleep(BRIEFING_POLL_SECONDS)
+
     async def reminder_loop() -> None:
         while True:
             try:
@@ -180,6 +278,7 @@ def main() -> None:
 
     async def post_init(application: Application) -> None:
         application.bot_data["reminder_task"] = asyncio.create_task(reminder_loop())
+        application.bot_data["briefing_task"] = asyncio.create_task(briefing_loop())
         if cfg.api_token:
             from . import api
 
@@ -200,6 +299,9 @@ def main() -> None:
     app.post_shutdown = post_shutdown
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("stem", stem))
+    app.add_handler(CommandHandler("overzicht", overzicht))
+    app.add_handler(CommandHandler("ochtend", ochtend))
     app.add_handler(CommandHandler("taken", lambda u, c: quick(u, c, "list_tasks", {"include_done": False})))
     app.add_handler(CommandHandler("herinneringen", lambda u, c: quick(u, c, "list_reminders", {})))
     app.add_handler(CallbackQueryHandler(on_button))
